@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -22,9 +25,12 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Ensure debug keystore exists
+      - name: Restore consistent debug signing keystore
         run: |
-          if [ ! -f debug.keystore ]; then
+          if [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
+            echo "Restored consistent signing key from debug.keystore.base64"
+          elif [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -42,9 +48,32 @@ jobs:
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon
 
+      - name: Prepare named APK copy
+        id: version
+        run: |
+          VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1)
+          VERSION_NAME=${VERSION_NAME:-1.0}
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/debug/app-debug.apk "Geoport-EMF-v${VERSION_NAME}.apk"
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Geoport-EMF-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish or Update GitHub Release for In-App Update Pop-Up
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version_name }}"
+          APK_FILE="Geoport-EMF-v${{ steps.version.outputs.version_name }}.apk"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_FILE" --clobber
+          else
+            gh release create "$TAG" "$APK_FILE" \
+              --title "Geoport EMF $TAG" \
+              --notes "Latest Geoport EMF Android build ($TAG). Tap the APK asset below to install or update over your existing app without losing saved data."
+          fi
