@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MenuBook
@@ -38,6 +39,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.MenuBook
@@ -87,6 +90,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
+import com.example.data.model.UpdateCheckStatus
+import com.example.ui.components.AppUpdateAvailableDialog
+import com.example.ui.components.AppUpdateCenterDialog
 import com.example.ui.components.BatteryPowerMonitorSheet
 import com.example.ui.components.BatteryWarningBanner
 import com.example.ui.components.EmfVisualAlertBanner
@@ -97,6 +103,7 @@ import com.example.ui.screens.JournalScreen
 import com.example.ui.screens.LogsExportScreen
 import com.example.ui.screens.OvilusScreen
 import com.example.ui.screens.RecorderScreen
+import com.example.ui.screens.SlsCameraScreen
 import com.example.ui.screens.SpiritBoxScreen
 import com.example.ui.theme.AnomalyCrimson
 import com.example.ui.theme.FranksAmber
@@ -119,6 +126,12 @@ sealed class GeoportDestination(
         labelRes = R.string.nav_emf_radar,
         selectedIcon = Icons.Filled.Radar,
         unselectedIcon = Icons.Outlined.Radar
+    )
+    data object SlsCamera : GeoportDestination(
+        route = "sls_camera",
+        labelRes = R.string.nav_sls_camera,
+        selectedIcon = Icons.Filled.AccessibilityNew,
+        unselectedIcon = Icons.Outlined.AccessibilityNew
     )
     data object SpiritBox : GeoportDestination(
         route = "spirit_box",
@@ -152,7 +165,7 @@ sealed class GeoportDestination(
     )
 
     companion object {
-        val entries = listOf(EmfRadar, SpiritBox, Ovilus, Recorder, Journal, LogsExport)
+        val entries = listOf(EmfRadar, SlsCamera, SpiritBox, Ovilus, Recorder, Journal, LogsExport)
     }
 }
 
@@ -195,6 +208,8 @@ fun GeoportApp(
     val batteryState by viewModel.batteryState.collectAsStateWithLifecycle()
     val nightVisionEnabled by viewModel.nightVisionEnabled.collectAsStateWithLifecycle()
     val nightVisionBrightness by viewModel.nightVisionBrightness.collectAsStateWithLifecycle()
+    val hasCameraPermission by viewModel.hasCameraPermission.collectAsStateWithLifecycle()
+    val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
 
     var showNewSessionDialog by remember { mutableStateOf(false) }
     var showBatterySheet by remember { mutableStateOf(false) }
@@ -220,6 +235,12 @@ fun GeoportApp(
         } else if (!granted) {
             startRecordingAfterPermission = false
         }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.updateCameraPermission(granted)
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -266,6 +287,12 @@ fun GeoportApp(
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         viewModel.updateMicPermission(hasMic)
+
+        val hasCam = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        viewModel.updateCameraPermission(hasCam)
 
         val hasFine = ContextCompat.checkSelfPermission(
             context,
@@ -384,6 +411,37 @@ fun GeoportApp(
                                 if (recorderState.isRecording) {
                                     StatusLed(active = true, activeColor = AnomalyCrimson, pulse = true)
                                 }
+                                val hasPendingUpdate = appUpdateState.status == UpdateCheckStatus.UPDATE_AVAILABLE
+                                Box(contentAlignment = Alignment.TopEnd) {
+                                    IconButton(
+                                        onClick = {
+                                            if (hasPendingUpdate && appUpdateState.availableRelease != null) {
+                                                viewModel.checkForAppUpdates(isManual = true)
+                                            } else {
+                                                viewModel.openUpdateSettings()
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("top_update_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.SystemUpdate,
+                                            contentDescription = stringResource(R.string.cd_check_updates),
+                                            tint = if (hasPendingUpdate) PhosphorCyan else TextSecondary
+                                        )
+                                    }
+                                    if (hasPendingUpdate) {
+                                        StatusLed(
+                                            active = true,
+                                            activeColor = PhosphorCyan,
+                                            pulse = true,
+                                            modifier = Modifier
+                                                .padding(top = 8.dp, end = 8.dp)
+                                                .size(8.dp)
+                                        )
+                                    }
+                                }
                                 val batColor = when {
                                     batteryState.isCharging -> GeoportTeal
                                     batteryState.isLowPowerAlertActive || batteryState.isThermalAlertActive -> AnomalyCrimson
@@ -442,6 +500,7 @@ fun GeoportApp(
                                     val contentColor = if (selected) MaterialTheme.colorScheme.primary else TextSecondary
                                     val activeBadgeColor = when (dest) {
                                         GeoportDestination.EmfRadar -> if (activeSession != null) GeoportTeal else null
+                                        GeoportDestination.SlsCamera -> if (hasCameraPermission && currentRoute == GeoportDestination.SlsCamera.route) GeoportTeal else null
                                         GeoportDestination.SpiritBox -> if (spiritBoxState.isRunning) FranksAmber else null
                                         GeoportDestination.Ovilus -> if (ovilusState.isActive) PhosphorCyan else null
                                         GeoportDestination.Recorder -> if (recorderState.isRecording) AnomalyCrimson else null
@@ -584,6 +643,7 @@ fun GeoportApp(
                                 onIgnoreMotionToggle = viewModel::setIgnoreMotionAlerts,
                                 onStartSessionClick = { showNewSessionDialog = true },
                                 onStopSessionClick = viewModel::endActiveInvestigationSession,
+                                onPowerFilterModeChange = viewModel::setPowerSourceFilterMode,
                                 temperatureReading = temperatureReading,
                                 trendSamples = trendSamples,
                                 audioClips = allClips,
@@ -598,6 +658,21 @@ fun GeoportApp(
                                         restoreState = true
                                     }
                                 }
+                            )
+                        }
+
+                        composable(GeoportDestination.SlsCamera.route) {
+                            SlsCameraScreen(
+                                hasCameraPermission = hasCameraPermission,
+                                emfReading = emfReading,
+                                temperatureReading = temperatureReading,
+                                activeSession = activeSession,
+                                onRequestCameraPermission = {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                },
+                                onStartSessionClick = { showNewSessionDialog = true },
+                                onStopSessionClick = viewModel::endActiveInvestigationSession,
+                                onLogSlsSighting = viewModel::logSlsSighting
                             )
                         }
 
@@ -805,6 +880,29 @@ fun GeoportApp(
             onAutoProtectChange = viewModel::setAutoProtectRecording,
             onEnableLowPower = viewModel::enableLowPowerMode,
             onDismiss = { showBatterySheet = false }
+        )
+    }
+
+    val availableRelease = appUpdateState.availableRelease
+    if (appUpdateState.showUpdatePopup && availableRelease != null) {
+        AppUpdateAvailableDialog(
+            currentVersionName = appUpdateState.currentVersionName,
+            release = availableRelease,
+            onOpenDownloadPage = viewModel::openExternalUpdatePage,
+            onSkipVersion = viewModel::skipUpdateVersion,
+            onDismiss = viewModel::dismissUpdatePopup
+        )
+    }
+
+    if (appUpdateState.showUpdateSettingsDialog) {
+        AppUpdateCenterDialog(
+            updateState = appUpdateState,
+            onSaveSourceAndCheck = { src ->
+                viewModel.checkForAppUpdates(sourceOverride = src, isManual = true)
+            },
+            onAutoCheckToggle = viewModel::setAutoCheckUpdates,
+            onOpenExternalPage = viewModel::openExternalUpdatePage,
+            onDismiss = viewModel::dismissUpdateSettings
         )
     }
 }

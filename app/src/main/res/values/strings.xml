@@ -6,6 +6,7 @@
     <string name="nav_recorder">Recorder</string>
     <string name="nav_journal">Journal</string>
     <string name="nav_logs_export">Logs</string>
+    <string name="nav_sls_camera">SLS Cam</string>
     <string name="cd_app_logo">Geoport EMF icon</string>
     <string name="cd_emf_radar_canvas">Real-time 3-axis electromagnetic field radar map</string>
     <string name="cd_emf_waveform">Real-time electromagnetic field fluctuation waveform</string>
@@ -17,8 +18,12 @@
     <string name="cd_export_json">Export investigation log as JSON</string>
     <string name="cd_share_file">Share file</string>
     <string name="cd_delete_item">Delete item</string>
+    <string name="cd_sls_camera_feed">Live SLS structured light skeletal tracking camera feed</string>
+    <string name="cd_check_updates">Check for Geoport EMF app updates</string>
     <string name="permission_audio_rationale">Microphone access is required to record EVP audio clips and capture spirit box sessions directly to local device storage.</string>
     <string name="grant_mic_permission">Enable Microphone</string>
+    <string name="permission_camera_rationale">Camera access is required for SLS Camera Mode to track live human skeletal wireframes and structured-light motion zones on-device.</string>
+    <string name="grant_camera_permission">Enable SLS Camera</string>
     <string name="permission_location_rationale">Foreground location access automatically stamps GPS coordinates onto investigation logs and journal entries while an investigation is active.</string>
     <string name="grant_location_permission">Enable GPS Tagging</string>
     <string name="no_magnetometer_title">No Hardware Magnetometer Detected</string>

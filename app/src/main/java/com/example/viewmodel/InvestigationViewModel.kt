@@ -26,6 +26,8 @@ import com.example.data.local.InvestigationDatabase
 import com.example.data.local.InvestigationSessionEntity
 import com.example.data.local.JournalEntryEntity
 import com.example.data.local.SensorTrendSampleEntity
+import com.example.BuildConfig
+import com.example.data.model.AppUpdateUiState
 import com.example.data.model.BatteryTelemetryState
 import com.example.data.model.EmfAlertBannerState
 import com.example.data.model.EmfAlertConfig
@@ -39,13 +41,16 @@ import com.example.data.model.OvilusMode
 import com.example.data.model.OvilusState
 import com.example.data.model.OvilusVoiceProfile
 import com.example.data.model.PlaybackState
+import com.example.data.model.PowerSourceFilterMode
 import com.example.data.model.RecorderState
 import com.example.data.model.SpiritBoxMode
 import com.example.data.model.SpiritBoxState
 import com.example.data.model.SweepDirection
 import com.example.data.model.TemperatureReading
 import com.example.data.model.TemperatureSensorStatus
+import com.example.data.model.UpdateCheckStatus
 import com.example.data.repository.InvestigationRepository
+import com.example.engine.AppUpdateEngine
 import com.example.engine.BatteryMonitorEngine
 import com.example.engine.ClipAutoTagEngine
 import com.example.engine.DigitalAudioRecorder
@@ -63,6 +68,8 @@ import com.example.engine.StorageLocationManager
 import com.example.engine.StorageStatus
 import com.example.engine.StorageTargetMode
 import com.example.engine.TemperatureSensorEngine
+import com.example.engine.UpdateCheckOutcome
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -121,6 +128,7 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
     private val alertSoundKey = stringPreferencesKey("alert_sound_name")
     private val hapticKey = booleanPreferencesKey("haptic_alert_enabled")
     private val ignoreMotionAlertKey = booleanPreferencesKey("ignore_motion_alerts")
+    private val powerSourceFilterKey = stringPreferencesKey("power_source_filter_mode")
 
     private val storageModeKey = stringPreferencesKey("storage_target_mode")
     private val customTreeUriKey = stringPreferencesKey("custom_tree_uri")
@@ -132,6 +140,9 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
     private val nightVisionBrightnessKey = floatPreferencesKey("night_vision_brightness")
     private val noiseSuppressionKey = stringPreferencesKey("noise_suppression_level")
     private val mainsHumNotchKey = booleanPreferencesKey("mains_hum_notch_enabled")
+    private val updateSourceKey = stringPreferencesKey("app_update_source")
+    private val autoCheckUpdatesKey = booleanPreferencesKey("app_update_auto_check")
+    private val skippedVersionKey = stringPreferencesKey("app_update_skipped_version")
 
     val nightVisionEnabled: StateFlow<Boolean> = application.settingsDataStore.data
         .map { prefs -> prefs[nightVisionKey] ?: false }
@@ -145,12 +156,16 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
         .map { prefs ->
             val soundName = prefs[alertSoundKey] ?: EmfAlertSound.K2_CHIRP.name
             val sound = runCatching { EmfAlertSound.valueOf(soundName) }.getOrDefault(EmfAlertSound.K2_CHIRP)
+            val powerModeName = prefs[powerSourceFilterKey] ?: PowerSourceFilterMode.STANDARD.name
+            val powerMode = runCatching { PowerSourceFilterMode.valueOf(powerModeName) }
+                .getOrDefault(PowerSourceFilterMode.STANDARD)
             EmfAlertConfig(
                 thresholdUt = prefs[thresholdKey] ?: 6.0f,
                 audibleAlertEnabled = prefs[audibleAlertKey] ?: true,
                 selectedSound = sound,
                 hapticAlertEnabled = prefs[hapticKey] ?: true,
-                ignoreMotionAlerts = prefs[ignoreMotionAlertKey] ?: true
+                ignoreMotionAlerts = prefs[ignoreMotionAlertKey] ?: true,
+                powerSourceFilterMode = powerMode
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EmfAlertConfig())
@@ -218,6 +233,19 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
     private val _inspectedSegmentId = MutableStateFlow<Long?>(null)
     val inspectedSegmentId: StateFlow<Long?> = _inspectedSegmentId.asStateFlow()
 
+    private val _hasCameraPermission = MutableStateFlow(false)
+    val hasCameraPermission: StateFlow<Boolean> = _hasCameraPermission.asStateFlow()
+
+    private val _appUpdateState = MutableStateFlow(
+        AppUpdateUiState(
+            currentVersionName = BuildConfig.VERSION_NAME,
+            currentVersionCode = BuildConfig.VERSION_CODE
+        )
+    )
+    val appUpdateState: StateFlow<AppUpdateUiState> = _appUpdateState.asStateFlow()
+
+    private var hasRunStartupUpdateCheck = false
+
     private val _uiEvents = MutableSharedFlow<UiEvent>()
     val uiEvents = _uiEvents.asSharedFlow()
 
@@ -255,6 +283,21 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
                 val humNotch = prefs[mainsHumNotchKey] ?: true
                 recorder.setNoiseSuppressionLevel(nsLevel)
                 recorder.setMainsHumNotchEnabled(humNotch)
+
+                val savedSource = prefs[updateSourceKey] ?: ""
+                val autoCheck = prefs[autoCheckUpdatesKey] ?: true
+                val skipped = prefs[skippedVersionKey] ?: ""
+                _appUpdateState.value = _appUpdateState.value.copy(
+                    updateSource = savedSource,
+                    autoCheckOnLaunch = autoCheck,
+                    skippedVersion = skipped
+                )
+                if (!hasRunStartupUpdateCheck) {
+                    hasRunStartupUpdateCheck = true
+                    if (autoCheck && savedSource.isNotBlank()) {
+                        checkForAppUpdates(sourceOverride = savedSource, isManual = false)
+                    }
+                }
             }
         }
 
@@ -291,6 +334,7 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
         viewModelScope.launch {
             alertConfig.collect { cfg ->
                 recorder.updateEmfThreshold(cfg.thresholdUt)
+                emfEngine.setPowerSourceFilterMode(cfg.powerSourceFilterMode)
             }
         }
 
@@ -632,6 +676,21 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
             getApplication<Application>().settingsDataStore.edit { prefs ->
                 prefs[ignoreMotionAlertKey] = ignore
             }
+        }
+    }
+
+    fun setPowerSourceFilterMode(mode: PowerSourceFilterMode) {
+        emfEngine.setPowerSourceFilterMode(mode)
+        viewModelScope.launch {
+            getApplication<Application>().settingsDataStore.edit { prefs ->
+                prefs[powerSourceFilterKey] = mode.name
+            }
+            val msg = when (mode) {
+                PowerSourceFilterMode.OFF -> "Power-source EMF filter disabled (showing raw EMF)."
+                PowerSourceFilterMode.STANDARD -> "Power-source EMF filter set to Standard (rejecting steady wiring & AC hum)."
+                PowerSourceFilterMode.STRICT -> "Power-source EMF filter set to Strict (aggressive wiring & appliance rejection)."
+            }
+            _uiEvents.emit(UiEvent.ShowMessage(msg))
         }
     }
 
@@ -1362,6 +1421,188 @@ class InvestigationViewModel(application: Application) : AndroidViewModel(applic
                     if (ok) "Audio clip exported to selected folder." else "Failed to export audio clip."
                 )
             )
+        }
+    }
+
+    // ---- SLS Camera Mode ----
+
+    fun updateCameraPermission(granted: Boolean) {
+        _hasCameraPermission.value = granted
+    }
+
+    fun logSlsSighting(
+        jointCount: Int,
+        avgConfidencePct: Int,
+        visualModeLabel: String,
+        isLowLight: Boolean
+    ) {
+        viewModelScope.launch {
+            val emf = currentEmfReading.value
+            val temp = temperatureReading.value
+            val coord = locationStatus.value.currentCoordinate
+            val session = activeSession.value
+            val now = System.currentTimeMillis()
+            val header = if (jointCount >= 4) {
+                "SLS Figure Sighting ($jointCount joints • $avgConfidencePct% conf)"
+            } else {
+                "SLS Camera Snapshot ($visualModeLabel)"
+            }
+            val tempText = "${"%.1f".format(Locale.US, temp.temperatureC)}°C (Δ ${"%+.1f".format(Locale.US, temp.deltaC)}°C)"
+            val noteBody = buildString {
+                append(header)
+                append(" | Optics: $visualModeLabel")
+                if (isLowLight) append(" [Low-Light]")
+                append(" | EMF: ${"%.1f".format(Locale.US, emf.magnitude)} μT (Δ ${"%+.1f".format(Locale.US, emf.delta)} μT)")
+                append(" | Temp: $tempText")
+            }
+
+            repository.insertJournalEntry(
+                JournalEntryEntity(
+                    sessionId = session?.id,
+                    timestampMs = now,
+                    latitude = coord?.latitude,
+                    longitude = coord?.longitude,
+                    gpsAccuracyMeters = coord?.accuracyMeters,
+                    locationLabel = session?.locationName?.ifBlank { "SLS Camera Sighting" } ?: "SLS Camera Sighting",
+                    noteText = noteBody,
+                    tags = if (jointCount >= 4) "SLS Camera, Figure Locked" else "SLS Camera, Snapshot",
+                    emfMagnitudeUt = emf.magnitude,
+                    emfDeltaUt = emf.delta,
+                    associatedAnomalyId = null,
+                    associatedAnomalySummary = header
+                )
+            )
+
+            if (session != null && jointCount >= 4) {
+                repository.logEmfAnomaly(
+                    sessionId = session.id,
+                    magnitudeUt = emf.magnitude,
+                    deltaUt = emf.delta,
+                    xUt = emf.x,
+                    yUt = emf.y,
+                    zUt = emf.z,
+                    severity = "SLS_FIGURE",
+                    note = "SLS locked $jointCount joints ($avgConfidencePct% conf, $visualModeLabel)",
+                    isMotionArtifact = emf.isDeviceMoving,
+                    coordinate = coord
+                )
+            }
+
+            triggerHapticPulse()
+            _uiEvents.emit(UiEvent.ShowMessage("SLS sighting logged to Investigation Journal."))
+        }
+    }
+
+    // ---- Creator Program-Compliant App Updates ----
+
+    fun openUpdateSettings() {
+        _appUpdateState.value = _appUpdateState.value.copy(showUpdateSettingsDialog = true)
+    }
+
+    fun dismissUpdateSettings() {
+        _appUpdateState.value = _appUpdateState.value.copy(showUpdateSettingsDialog = false)
+    }
+
+    fun dismissUpdatePopup() {
+        _appUpdateState.value = _appUpdateState.value.copy(showUpdatePopup = false)
+    }
+
+    fun skipUpdateVersion(versionName: String) {
+        viewModelScope.launch {
+            getApplication<Application>().settingsDataStore.edit { prefs ->
+                prefs[skippedVersionKey] = versionName
+            }
+            _appUpdateState.value = _appUpdateState.value.copy(
+                skippedVersion = versionName,
+                showUpdatePopup = false
+            )
+            _uiEvents.emit(UiEvent.ShowMessage("Skipped reminder for v$versionName."))
+        }
+    }
+
+    fun setAutoCheckUpdates(enabled: Boolean) {
+        viewModelScope.launch {
+            getApplication<Application>().settingsDataStore.edit { prefs ->
+                prefs[autoCheckUpdatesKey] = enabled
+            }
+            _appUpdateState.value = _appUpdateState.value.copy(autoCheckOnLaunch = enabled)
+        }
+    }
+
+    fun checkForAppUpdates(sourceOverride: String? = null, isManual: Boolean = true) {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            val source = (sourceOverride ?: _appUpdateState.value.updateSource).trim()
+            if (sourceOverride != null) {
+                ctx.settingsDataStore.edit { prefs ->
+                    prefs[updateSourceKey] = source
+                }
+            }
+            _appUpdateState.value = _appUpdateState.value.copy(
+                updateSource = source,
+                status = UpdateCheckStatus.CHECKING,
+                statusMessage = "Checking for updates..."
+            )
+
+            val outcome = AppUpdateEngine.checkForUpdates(
+                currentVersionName = BuildConfig.VERSION_NAME,
+                updateSource = source,
+                packageName = ctx.packageName
+            )
+            val now = System.currentTimeMillis()
+            val skipped = _appUpdateState.value.skippedVersion
+
+            when (outcome) {
+                is UpdateCheckOutcome.UpdateAvailable -> {
+                    val shouldPopup = isManual || outcome.release.versionName != skipped
+                    _appUpdateState.value = _appUpdateState.value.copy(
+                        status = UpdateCheckStatus.UPDATE_AVAILABLE,
+                        availableRelease = outcome.release,
+                        showUpdatePopup = shouldPopup,
+                        showUpdateSettingsDialog = if (shouldPopup) false else _appUpdateState.value.showUpdateSettingsDialog,
+                        statusMessage = "New version v${outcome.release.versionName} is available!",
+                        lastCheckedMs = now
+                    )
+                }
+                is UpdateCheckOutcome.UpToDate -> {
+                    _appUpdateState.value = _appUpdateState.value.copy(
+                        status = UpdateCheckStatus.UP_TO_DATE,
+                        availableRelease = null,
+                        showUpdatePopup = false,
+                        statusMessage = "You are up to date (v${BuildConfig.VERSION_NAME} • Latest: v${outcome.latestVersion}).",
+                        lastCheckedMs = now
+                    )
+                }
+                is UpdateCheckOutcome.NeedsSourceConfig -> {
+                    _appUpdateState.value = _appUpdateState.value.copy(
+                        status = UpdateCheckStatus.NEEDS_SOURCE_CONFIG,
+                        statusMessage = "Enter your GitHub repository (e.g. username/geoport-emf) above, or tap Open Releases / Play Store Page.",
+                        lastCheckedMs = now
+                    )
+                }
+                is UpdateCheckOutcome.Error -> {
+                    _appUpdateState.value = _appUpdateState.value.copy(
+                        status = UpdateCheckStatus.ERROR,
+                        statusMessage = outcome.message,
+                        lastCheckedMs = now
+                    )
+                }
+            }
+        }
+    }
+
+    fun openExternalUpdatePage(urlOrSource: String) {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            val resolvedUrl = AppUpdateEngine.resolveExternalPageUrl(urlOrSource, ctx.packageName)
+            val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(resolvedUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            _appUpdateState.value = _appUpdateState.value.copy(
+                showUpdatePopup = false,
+                showUpdateSettingsDialog = false
+            )
+            _uiEvents.emit(UiEvent.LaunchShareIntent(viewIntent))
         }
     }
 

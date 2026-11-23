@@ -59,6 +59,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DeviceThermostat
 import com.example.R
 import com.example.data.local.AudioClipEntity
@@ -69,6 +70,7 @@ import com.example.data.model.EmfAlertConfig
 import com.example.data.model.EmfAlertSound
 import com.example.data.model.EmfReading
 import com.example.data.model.EmfSensorStatus
+import com.example.data.model.PowerSourceFilterMode
 import com.example.data.model.TemperatureReading
 import com.example.data.model.TrendTimeScale
 import com.example.ui.components.ActiveSessionBanner
@@ -108,6 +110,7 @@ fun EmfRadarScreen(
     onIgnoreMotionToggle: (Boolean) -> Unit,
     onStartSessionClick: () -> Unit,
     onStopSessionClick: () -> Unit,
+    onPowerFilterModeChange: (PowerSourceFilterMode) -> Unit = {},
     temperatureReading: TemperatureReading = TemperatureReading(),
     trendSamples: List<SensorTrendSampleEntity> = emptyList(),
     audioClips: List<AudioClipEntity> = emptyList(),
@@ -129,7 +132,8 @@ fun EmfRadarScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            .testTag("emf_radar_list"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -201,26 +205,52 @@ fun EmfRadarScreen(
                             color = statusColor
                         )
                     }
-                    if (reading.isDeviceMoving) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(FranksAmber.copy(alpha = 0.16f))
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Warning,
-                                contentDescription = null,
-                                tint = FranksAmber,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "MOTION",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = FranksAmber
-                            )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (alertConfig.powerSourceFilterMode != PowerSourceFilterMode.OFF) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(GeoportTeal.copy(alpha = if (reading.isPowerSourceFiltered) 0.24f else 0.12f))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                                    .testTag("power_filter_active_badge"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Bolt,
+                                    contentDescription = null,
+                                    tint = GeoportTeal,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (reading.isPowerSourceFiltered) "AC/WIRING REJECTED" else "AC FILTER ON",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GeoportTeal,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        if (reading.isDeviceMoving) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(FranksAmber.copy(alpha = 0.16f))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Warning,
+                                    contentDescription = null,
+                                    tint = FranksAmber,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "MOTION",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = FranksAmber
+                                )
+                            }
                         }
                     }
                 }
@@ -243,10 +273,19 @@ fun EmfRadarScreen(
                             style = MaterialTheme.typography.labelMedium,
                             color = TextSecondary
                         )
+                        if (reading.isPowerSourceFiltered) {
+                            val offsetSign = if (reading.powerSourceOffsetUt >= 0f) "+" else ""
+                            Text(
+                                text = "Blocked ${reading.powerSourceLabel.ifBlank { "Power EMF" }} ($offsetSign${"%.1f".format(Locale.US, reading.powerSourceOffsetUt)} μT)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = GeoportTeal,
+                                modifier = Modifier.testTag("power_filter_offset_readout")
+                            )
+                        }
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = "DELTA (Δ)",
+                            text = if (alertConfig.powerSourceFilterMode != PowerSourceFilterMode.OFF) "ANOMALY Δ" else "DELTA (Δ)",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextMuted
                         )
@@ -605,6 +644,74 @@ fun EmfRadarScreen(
                             ),
                             modifier = Modifier.testTag("alert_sound_${sound.name.lowercase()}")
                         )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Power-Source EMF Rejection Filter Controls
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ElevatedCard.copy(alpha = 0.65f))
+                        .border(1.dp, SubtleBorder, RoundedCornerShape(10.dp))
+                        .padding(10.dp)
+                        .testTag("power_source_filter_panel")
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Bolt,
+                                contentDescription = null,
+                                tint = GeoportTeal,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "POWER-SOURCE EMF FILTER",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = alertConfig.powerSourceFilterMode.label.uppercase(Locale.US),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (alertConfig.powerSourceFilterMode == PowerSourceFilterMode.OFF) TextMuted else GeoportTeal,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag("power_filter_mode_status")
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = alertConfig.powerSourceFilterMode.subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PowerSourceFilterMode.entries.forEach { mode ->
+                            val selected = alertConfig.powerSourceFilterMode == mode
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onPowerFilterModeChange(mode) },
+                                label = { Text(mode.label, style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = GeoportTeal.copy(alpha = 0.22f),
+                                    selectedLabelColor = GeoportTeal
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("power_filter_${mode.name.lowercase()}")
+                            )
+                        }
                     }
                 }
 

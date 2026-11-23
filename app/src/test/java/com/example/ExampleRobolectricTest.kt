@@ -935,6 +935,157 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("play_clip_1").assertExists()
     }
 
+    @Test
+    fun `emf sensor engine rejects steady power source wiring and periodic ac mains ripple while passing sudden spikes`() {
+        val engine = com.example.engine.EmfSensorEngine(context = null)
+        var t = 1_700_000_000_000L
+
+        // 1. Calibrate Earth baseline at 45.0 μT (15 samples)
+        repeat(15) {
+            engine.processMagneticSample(45.0f, 0f, 0f, t)
+            t += 100L
+        }
+
+        // 2. Approach steady wall wiring / appliance field (+16 μT constant = 61.0 μT) for 3.0s
+        var steadyReading = EmfReading()
+        repeat(30) {
+            steadyReading = engine.processMagneticSample(61.0f, 0f, 0f, t)
+            t += 100L
+        }
+        assertEquals(true, steadyReading.isPowerSourceFiltered)
+        assertEquals("Wiring / Appliance", steadyReading.powerSourceLabel)
+        assertTrue(
+            "Expected powerSourceOffsetUt > 12 μT, got ${steadyReading.powerSourceOffsetUt}",
+            steadyReading.powerSourceOffsetUt > 12f
+        )
+        assertTrue(
+            "Expected steady wiring delta filtered below 3.0 μT, got ${steadyReading.delta}",
+            kotlin.math.abs(steadyReading.delta) < 3.0f
+        )
+
+        // 3. Walk away from power source back to 45.0 μT — verify no false negative rebound alert
+        var walkAwayReading = EmfReading()
+        repeat(8) {
+            walkAwayReading = engine.processMagneticSample(45.0f, 0f, 0f, t)
+            assertTrue(
+                "Walking away from power source should not create a false rebound alert, got ${walkAwayReading.delta}",
+                kotlin.math.abs(walkAwayReading.delta) < 3.5f
+            )
+            t += 100L
+        }
+        assertEquals(0f, walkAwayReading.powerSourceOffsetUt, 0.25f)
+
+        // 4. Sudden transient +18 μT anomaly spike (63.0 μT for 3 samples) should pass through
+        var spikeReading = EmfReading()
+        repeat(3) {
+            spikeReading = engine.processMagneticSample(63.0f, 0f, 0f, t)
+            t += 100L
+        }
+        assertTrue(
+            "Expected sudden transient spike > 12 μT to pass through, got ${spikeReading.delta}",
+            spikeReading.delta > 12.0f
+        )
+
+        // Return briefly to baseline
+        repeat(5) {
+            engine.processMagneticSample(45.0f, 0f, 0f, t)
+            t += 100L
+        }
+
+        // 5. Periodic alternating AC mains ripple (45 ± 8 μT) should be detected and suppressed
+        var rippleReading = EmfReading()
+        for (i in 0 until 16) {
+            val mag = if (i % 2 == 0) 53.0f else 37.0f
+            rippleReading = engine.processMagneticSample(mag, 0f, 0f, t)
+            t += 60L
+        }
+        assertEquals(true, rippleReading.isPowerSourceFiltered)
+        assertEquals("AC Mains Ripple", rippleReading.powerSourceLabel)
+        assertTrue(
+            "Expected AC mains ripple delta suppressed below 3.0 μT, got ${rippleReading.delta}",
+            kotlin.math.abs(rippleReading.delta) < 3.0f
+        )
+
+        // 6. Switching to OFF mode passes raw +16 μT reading untouched
+        engine.setPowerSourceFilterMode(com.example.data.model.PowerSourceFilterMode.OFF)
+        val rawReading = engine.processMagneticSample(61.0f, 0f, 0f, t)
+        assertEquals(false, rawReading.isPowerSourceFiltered)
+        assertEquals(16.0f, rawReading.delta, 0.1f)
+    }
+
+    @Test
+    fun `emf radar screen renders power source filter controls and rejected power emf readout`() {
+        var selectedMode by mutableStateOf(com.example.data.model.PowerSourceFilterMode.STANDARD)
+
+        composeTestRule.setContent {
+            GeoportEmfTheme {
+                com.example.ui.screens.EmfRadarScreen(
+                    sensorStatus = com.example.data.model.EmfSensorStatus(
+                        isHardwareAvailable = true,
+                        isListening = true,
+                        isCalibrating = false,
+                        sensorName = "AK09918 Magnetometer",
+                        sensorVendor = "AKM",
+                        resolutionUt = 0.15f
+                    ),
+                    reading = EmfReading(
+                        x = 12f,
+                        y = 35f,
+                        z = 46f,
+                        magnitude = 59.2f,
+                        baseline = 45.0f,
+                        delta = 0.0f,
+                        rawDelta = 14.2f,
+                        powerSourceOffsetUt = 14.2f,
+                        isPowerSourceFiltered = true,
+                        powerSourceLabel = "Wiring / Appliance"
+                    ),
+                    history = emptyList(),
+                    activeSession = null,
+                    alertConfig = com.example.data.model.EmfAlertConfig(
+                        powerSourceFilterMode = selectedMode
+                    ),
+                    onCalibrateClick = {},
+                    onManualMarkClick = {},
+                    onThresholdChange = {},
+                    onAudibleAlertToggle = {},
+                    onSelectAlertSound = {},
+                    onPreviewAlertSound = {},
+                    onHapticToggle = {},
+                    onIgnoreMotionToggle = {},
+                    onStartSessionClick = {},
+                    onStopSessionClick = {},
+                    onPowerFilterModeChange = { selectedMode = it }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("power_filter_active_badge")
+            .assertTextContains("AC/WIRING REJECTED", substring = true)
+        composeTestRule.onNodeWithTag("power_filter_offset_readout")
+            .assertTextContains("Blocked Wiring / Appliance", substring = true)
+
+        composeTestRule.onNodeWithTag("emf_radar_list")
+            .performScrollToNode(hasTestTag("power_source_filter_panel"))
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("power_filter_mode_status")
+            .assertTextContains("STANDARD", substring = true)
+
+        composeTestRule.onNodeWithTag("power_filter_strict").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.data.model.PowerSourceFilterMode.STRICT, selectedMode)
+        composeTestRule.onNodeWithTag("power_filter_mode_status")
+            .assertTextContains("STRICT", substring = true)
+
+        composeTestRule.onNodeWithTag("power_filter_off").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.data.model.PowerSourceFilterMode.OFF, selectedMode)
+        composeTestRule.onNodeWithTag("power_filter_mode_status")
+            .assertTextContains("OFF", substring = true)
+    }
+
     private fun writeTestWav(file: File, sampleRate: Int, samples: ShortArray) {
         val totalAudioLen = samples.size.toLong() * 2L
         val totalDataLen = totalAudioLen + 36L

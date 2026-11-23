@@ -19,12 +19,19 @@ enum class EmfAlertSound(val label: String, val description: String) {
     SILENT("Visual Only", "Mute audible tone; keep visual & haptic alerts")
 }
 
+enum class PowerSourceFilterMode(val label: String, val subtitle: String) {
+    OFF("Off", "Raw magnetometer reading including wiring & appliances"),
+    STANDARD("Standard", "Rejects steady wall wiring, outlets & 50/60 Hz AC hum"),
+    STRICT("Strict", "Aggressive power-source & appliance hum lock-out")
+}
+
 data class EmfAlertConfig(
     val thresholdUt: Float = 6.0f,
     val audibleAlertEnabled: Boolean = true,
     val selectedSound: EmfAlertSound = EmfAlertSound.K2_CHIRP,
     val hapticAlertEnabled: Boolean = true,
-    val ignoreMotionAlerts: Boolean = true
+    val ignoreMotionAlerts: Boolean = true,
+    val powerSourceFilterMode: PowerSourceFilterMode = PowerSourceFilterMode.STANDARD
 )
 
 data class EmfAlertBannerState(
@@ -60,7 +67,11 @@ data class EmfReading(
     val baseline: Float = 45f,
     val delta: Float = 0f,
     val motionDelta: Float = 0f,
-    val isDeviceMoving: Boolean = false
+    val isDeviceMoving: Boolean = false,
+    val rawDelta: Float = delta,
+    val powerSourceOffsetUt: Float = 0f,
+    val isPowerSourceFiltered: Boolean = false,
+    val powerSourceLabel: String = ""
 ) {
     val milligauss: Float get() = magnitude * 10f
     val deltaMilligauss: Float get() = delta * 10f
