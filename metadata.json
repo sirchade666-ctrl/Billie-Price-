@@ -1,0 +1,6 @@
+{
+  "name": "Geoport EMF",
+  "description": "Field investigation suite featuring real-time 3-axis EMF radar, historical EMF & temperature trend correlation charts, Frank's Box & Geoport Spirit Box, 80,000-word Ovilus ITC speaker, noise-suppressed EVP WAV recorder with zoomable waveform & phonetic spirit-speech analyzer, automatic sensor metadata tagging, SD card auto-detect, battery power monitoring, Night Vision red overlay, and CSV/JSON session exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

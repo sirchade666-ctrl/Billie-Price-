@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">Geoport EMF</string>
+    <string name="nav_emf_radar">EMF Radar</string>
+    <string name="nav_spirit_box">Spirit Box</string>
+    <string name="nav_ovilus">Ovilus</string>
+    <string name="nav_recorder">Recorder</string>
+    <string name="nav_journal">Journal</string>
+    <string name="nav_logs_export">Logs</string>
+    <string name="cd_app_logo">Geoport EMF icon</string>
+    <string name="cd_emf_radar_canvas">Real-time 3-axis electromagnetic field radar map</string>
+    <string name="cd_emf_waveform">Real-time electromagnetic field fluctuation waveform</string>
+    <string name="cd_audio_waveform">Live audio spectrum waveform</string>
+    <string name="cd_calibrate">Calibrate baseline electromagnetic field</string>
+    <string name="cd_record_toggle">Toggle audio recording</string>
+    <string name="cd_play_pause">Play or pause audio clip</string>
+    <string name="cd_export_csv">Export investigation log as CSV</string>
+    <string name="cd_export_json">Export investigation log as JSON</string>
+    <string name="cd_share_file">Share file</string>
+    <string name="cd_delete_item">Delete item</string>
+    <string name="permission_audio_rationale">Microphone access is required to record EVP audio clips and capture spirit box sessions directly to local device storage.</string>
+    <string name="grant_mic_permission">Enable Microphone</string>
+    <string name="permission_location_rationale">Foreground location access automatically stamps GPS coordinates onto investigation logs and journal entries while an investigation is active.</string>
+    <string name="grant_location_permission">Enable GPS Tagging</string>
+    <string name="no_magnetometer_title">No Hardware Magnetometer Detected</string>
+    <string name="no_magnetometer_desc">This device does not expose a hardware magnetic field sensor. Spirit Box synthesis, digital audio recording, and manual session logging remain fully functional.</string>
+    <string name="cd_night_vision_on">Enable Night Vision red overlay mode</string>
+    <string name="cd_night_vision_off">Disable Night Vision red overlay mode</string>
+    <string name="cd_telemetry_trend_chart">Historical EMF and temperature dual-axis trend chart with correlated audio event markers</string>
+</resources>
